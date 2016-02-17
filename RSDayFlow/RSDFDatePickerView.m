@@ -55,6 +55,10 @@ static NSString * const RSDFDatePickerViewDayCellIdentifier = @"RSDFDatePickerVi
 @property (nonatomic, readonly, strong) NSDate *startDate;
 @property (nonatomic, readonly, strong) NSDate *endDate;
 
+@property (nonatomic, readonly, strong) UIPanGestureRecognizer *panGestureRecognizer;
+@property (nonatomic, readonly, strong) NSDate *gestureRecognizerPreviousDate;
+@property (nonatomic, readonly, assign) float lastVelocity;
+
 @end
 
 @implementation RSDFDatePickerView
@@ -66,6 +70,9 @@ static NSString * const RSDFDatePickerViewDayCellIdentifier = @"RSDFDatePickerVi
 @synthesize collectionView = _collectionView;
 @synthesize collectionViewLayout = _collectionViewLayout;
 @synthesize daysInWeek = _daysInWeek;
+@synthesize panGestureRecognizer = _panGestureRecognizer;
+@synthesize gestureRecognizerPreviousDate = _gestureRecognizerPreviousDate;
+@synthesize lastVelocity = _lastVelocity;
 
 #pragma mark - Object Lifecycle
 
@@ -375,6 +382,15 @@ static NSString * const RSDFDatePickerViewDayCellIdentifier = @"RSDFDatePickerVi
 
 - (void)commonInitializer
 {
+    _panGestureRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(swipeGestureRecognizer:)];
+    [self addGestureRecognizer:_panGestureRecognizer];
+    
+    UILongPressGestureRecognizer *deleteGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(deletePeriodGestureRecognizer:)];
+    [self addGestureRecognizer:deleteGesture];
+    
+    UITapGestureRecognizer *tapRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapRecognizer:)];
+    [self addGestureRecognizer:tapRecognizer];
+    
     NSDateComponents *nowYearMonthComponents = [self.calendar components:(NSCalendarUnitYear | NSCalendarUnitMonth) fromDate:[NSDate date]];
     NSDate *now = [self.calendar dateFromComponents:nowYearMonthComponents];
     
@@ -665,6 +681,13 @@ static NSString * const RSDFDatePickerViewDayCellIdentifier = @"RSDFDatePickerVi
         NSUInteger cellDateWeekday = [self.calendar components:NSCalendarUnitWeekday fromDate:cellDate].weekday;
         cell.dayOff = (cellDateWeekday == self.calendar.rsdf_saturdayIndex) || (cellDateWeekday == self.calendar.rsdf_sundayIndex);
         
+        if ([self.delegate respondsToSelector:@selector(datePickerView:shouldSelectDate:)]) {
+            cell.selected = [self.delegate datePickerView:self shouldSelectDate:cellDate];
+        }
+        if ([self.dataSource respondsToSelector:@selector(datePickerView:opacityForDate:)]) {
+            cell.alpha = [self.dataSource datePickerView:self opacityForDate:cellDate];
+        }
+        
         if ([self.dataSource respondsToSelector:@selector(datePickerView:shouldMarkDate:)]) {
             cell.marked = [self.dataSource datePickerView:self shouldMarkDate:cellDate];
             
@@ -917,6 +940,107 @@ static NSString * const RSDFDatePickerViewDayCellIdentifier = @"RSDFDatePickerVi
         
         scrollView.decelerationRate = UIScrollViewDecelerationRateFast;
     }
+}
+
+#pragma mark Range selection methods
+
+- (void) tapRecognizer:(UITapGestureRecognizer*)recognizer {
+    CGPoint point = [recognizer locationInView:self.collectionView];
+    [self handleGestureSelectAndDeselect:[self dateForPoint:point]];
+}
+
+- (void) swipeGestureRecognizer:(UIPanGestureRecognizer*)recognizer {
+    CGPoint location = [recognizer locationInView:self.collectionView];
+    NSDate *locationDate = [self dateForPoint:location];
+    CGPoint velocity = [recognizer velocityInView:self.collectionView];
+    
+    if (recognizer.state == UIGestureRecognizerStateEnded) {
+        _gestureRecognizerPreviousDate = nil;
+        _lastVelocity = 0.0f;
+    } else if (recognizer.state == UIGestureRecognizerStateBegan){
+        _gestureRecognizerPreviousDate = locationDate;
+        [self handleGestureSelectAndDeselect:locationDate];
+    } else if (recognizer.state == UIGestureRecognizerStateChanged) {
+        if (_gestureRecognizerPreviousDate == nil) {
+            _gestureRecognizerPreviousDate = locationDate;
+            [self handleGestureSelectAndDeselect:locationDate];
+        } else if ([_gestureRecognizerPreviousDate compare:locationDate] == NSOrderedSame) {
+            
+        } else  if ([_gestureRecognizerPreviousDate compare:locationDate] == NSOrderedDescending || [_gestureRecognizerPreviousDate compare:locationDate] == NSOrderedAscending) {
+            if (_lastVelocity > 0.0f && velocity.x < 0.0f) [self handleGestureSelectAndDeselect:_gestureRecognizerPreviousDate];
+            if (_lastVelocity < 0.0f && velocity.x > 0.0f) [self handleGestureSelectAndDeselect:_gestureRecognizerPreviousDate];
+            _lastVelocity = velocity.x;
+            
+            _gestureRecognizerPreviousDate = locationDate;
+            [self handleGestureSelectAndDeselect:locationDate];
+        }
+    }
+}
+
+- (void) handleGestureSelectAndDeselect:(NSDate*)date {
+    if ([self.delegate respondsToSelector:@selector(datePickerView:toggleDate:)]) {
+        if (![self indexPathForDate:date]) return;
+        [self.delegate datePickerView:self toggleDate:date];
+        [UIView setAnimationsEnabled:NO];
+        [self.collectionView reloadItemsAtIndexPaths:@[[self indexPathForDate:date]]];
+        [UIView setAnimationsEnabled:YES];
+    }
+}
+
+- (void) deletePeriodGestureRecognizer:(UILongPressGestureRecognizer*)recognizer {
+    if (recognizer.state == UIGestureRecognizerStateBegan) {
+        CGPoint location = [recognizer locationInView:self.collectionView];
+        NSDate *date = [self dateForPoint:location];
+        if ([self.delegate respondsToSelector:@selector(datePickerView:shouldSelectDate:)]) {
+            if ([self.delegate datePickerView:self shouldSelectDate:date] && [self.dataSource datePickerView:self opacityForDate:date] == 1.0f) {
+                UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"Удалить период?"
+                                                                               message:nil
+                                                                        preferredStyle:UIAlertControllerStyleActionSheet];
+                
+                [alert addAction:[UIAlertAction actionWithTitle:@"Отмена" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+                    [self.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
+                }]];
+                
+                [alert addAction:[UIAlertAction actionWithTitle:@"Удалить" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+                    [self deleteDateRangeFromDate:date];
+                    [self.window.rootViewController dismissViewControllerAnimated:YES completion:nil];
+                }]];
+                
+                [self.window.rootViewController presentViewController:alert animated:YES completion:nil];
+                
+            }
+        }
+    }
+}
+
+- (void) deleteDateRangeFromDate:(NSDate*)selectedDate {
+    NSDate *leftDateRange = [selectedDate dateByAddingTimeInterval:-86400];
+    NSDate *rightDateRange = [selectedDate dateByAddingTimeInterval:86400];
+    
+    while ([self.delegate datePickerView:self shouldSelectDate:leftDateRange]) {
+        leftDateRange = [leftDateRange dateByAddingTimeInterval:-86400];
+        if ([self.dataSource datePickerView:self opacityForDate:leftDateRange] < 1.0f) break;
+    }
+    while ([self.delegate datePickerView:self shouldSelectDate:rightDateRange]) {
+        rightDateRange = [rightDateRange dateByAddingTimeInterval:86400];
+        if ([self.dataSource datePickerView:self opacityForDate:rightDateRange] < 1.0f) break;
+    }
+    
+    if ([self.delegate respondsToSelector:@selector(datePickerView:didDeleteDatesInRange:endDate:)]) {
+        [self.delegate datePickerView:self didDeleteDatesInRange:leftDateRange endDate:rightDateRange];
+    }
+    
+    for (NSIndexPath *indexPath in [self.collectionView indexPathsForSelectedItems]) {
+        [self.collectionView deselectItemAtIndexPath:indexPath animated:NO];
+        [[self.collectionView cellForItemAtIndexPath:indexPath] setNeedsDisplay];
+    }
+    [self.collectionView reloadData];
+}
+
+- (NSDate*) dateForPoint:(CGPoint)point {
+    NSIndexPath *gestureIndexPath = [self.collectionView indexPathForItemAtPoint:point];
+    NSDate *date = [self dateForCellAtIndexPath:gestureIndexPath] ? [self dateForCellAtIndexPath:gestureIndexPath] : nil;
+    return date;
 }
 
 @end

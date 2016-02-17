@@ -224,6 +224,23 @@
  */
 - (void)datePickerView:(RSDFDatePickerView *)view didSelectDate:(NSDate *)date;
 
+/**
+ *  Tells the delegate that the user changed status of the date
+ *
+ *  @param view The view whose date status was changed.
+ *  @param date Date, those status was changed
+ */
+- (void) datePickerView:(RSDFDatePickerView *)view toggleDate:(NSDate*)date;
+
+/**
+ *  Tells the delegate that user deleted dates range
+ *
+ *  @param view      The view whose dates range was deleted
+ *  @param startDate Start date of range
+ *  @param endDate   End date of range
+ */
+- (void)datePickerView:(RSDFDatePickerView *)view didDeleteDatesInRange:(NSDate *)startDate endDate:(NSDate *)endDate;
+
 @end
 
 /**
@@ -265,5 +282,14 @@
  @return The mark image for the specified date.
  */
 - (UIImage *)datePickerView:(RSDFDatePickerView *)view markImageForDate:(NSDate *)date;
+
+/**
+ *  Asks the data source about the opacity for the specified date.
+ *
+ *  @param view The date picker view object that is asking about the mark image for the specified date.
+ *
+ *  @return Opacity for the specified date.
+ */
+- (float)datePickerView:(RSDFDatePickerView *)view opacityForDate:(NSDate*)date;
 
 @end
